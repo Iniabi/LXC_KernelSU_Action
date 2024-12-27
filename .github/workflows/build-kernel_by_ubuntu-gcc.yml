@@ -81,6 +81,52 @@ jobs:
           git clone https://github.com/${{ env.CUSTOM_GCC_32_SOURCE }} -b ${{ env.CUSTOM_GCC_32_BRANCH }} $HOME/gcc32
           export PATH=$HOME/gcc32/bin:$PATH
         fi
+name: Build Kernel
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y liblz4-dev libssl-dev bc libncurses5-dev libncurses-dev libz-dev g++-aarch64-linux-gnu
+
+    - name: Clone kernel source
+      run: |
+        git clone --single-branch https://github.com/${{ env.KERNEL_SOURCE }} -b ${{ env.KERNEL_SOURCE_BRANCH }} $HOME/kernel
+        cd $HOME/kernel
+        git submodule update --init --recursive
+
+    - name: Ensure correct kernel configuration
+      run: |
+        cd $HOME/kernel
+        make ARCH=arm64 O=out defconfig
+
+    - name: Set up Clang or GCC
+      run: |
+        if [ "${{ env.USE_CUSTOM_CLANG }}" == "true" ]; then
+          git clone https://github.com/${{ env.CUSTOM_CLANG_SOURCE }} -b ${{ env.CUSTOM_CLANG_BRANCH }} $HOME/clang
+          export PATH=$HOME/clang/bin:$PATH
+        fi
+        if [ "${{ env.USE_CUSTOM_GCC_64 }}" == "true" ]; then
+          git clone https://github.com/${{ env.CUSTOM_GCC_64_SOURCE }} -b ${{ env.CUSTOM_GCC_64_BRANCH }} $HOME/gcc64
+          export PATH=$HOME/gcc64/bin:$PATH
+        fi
+        if [ "${{ env.USE_CUSTOM_GCC_32 }}" == "true" ]; then
+          git clone https://github.com/${{ env.CUSTOM_GCC_32_SOURCE }} -b ${{ env.CUSTOM_GCC_32_BRANCH }} $HOME/gcc32
+          export PATH=$HOME/gcc32/bin:$PATH
+        fi
+
     - name: Build Kernel
       run: |
         if [ "${{ env.ENABLE_GCC_ARM64 }}" == "true" ]; then
@@ -89,54 +135,18 @@ jobs:
         if [ "${{ env.ENABLE_GCC_ARM32 }}" == "true" ]; then
           export CROSS_COMPILE=arm-linux-gnueabi-
         fi
-        make -j$(nproc) ARCH=${{ env.ARCH }} O=out
-    - name: Build DTBO if needed
+        make -j$(nproc) ARCH=arm64 O=out
+
+    - name: Check output directory
       run: |
-        if [ "${{ env.NEED_DTBO }}" == "true" ]; then
-          make dtbs -j$(nproc) ARCH=${{ env.ARCH }} O=out
-        fi
-    - name: Build Boot Image if needed
-      run: |
-        if [ "${{ env.BUILD_BOOT_IMG }}" == "true" ]; then
-          make bootimage -j$(nproc) ARCH=${{ env.ARCH }} O=out
-        fi
-    - name: Build KernelSU if enabled
-      run: |
-        if [ "${{ env.ENABLE_KERNELSU }}" == "true" ]; then
-          cd $HOME/kernel
-          git clone https://github.com/${{ env.KERNELSU_TAG }} kernelSU
-          cd kernelSU
-          make -j$(nproc) ARCH=${{ env.ARCH }} O=out
-        fi
+        ls $HOME/kernel/out/arch/arm64/boot/
+
     - name: Upload Kernel Image
-      if: always()
       run: |
         mkdir -p $GITHUB_WORKSPACE/artifacts
-        cp $HOME/kernel/out/arch/${{ env.ARCH }}/boot/Image.gz-dtb $GITHUB_WORKSPACE/artifacts/
-        cp $HOME/kernel/out/arch/${{ env.ARCH }}/boot/dts/*.dtb $GITHUB_WORKSPACE/artifacts/
+        cp $HOME/kernel/out/arch/arm64/boot/Image.gz-dtb $GITHUB_WORKSPACE/artifacts/
+
     - name: Upload Kernel Modules
-      if: always()
       run: |
         mkdir -p $GITHUB_WORKSPACE/modules
         cp -r $HOME/kernel/out/modules/* $GITHUB_WORKSPACE/modules/
-    - name: Upload Kernel Logs
-      if: always()
-      run: |
-        mkdir -p $GITHUB_WORKSPACE/logs
-        cp -r $HOME/kernel/out/ $GITHUB_WORKSPACE/logs/
-    - name: Create Boot Image and KernelSU Overlay
-      run: |
-        if [ "${{ env.ENABLE_KERNELSU }}" == "true" ]; then
-          if [ "${{ env.KSU_EXPECTED_SIZE }}" == "$(stat -c %s $GITHUB_WORKSPACE/artifacts/Image.gz-dtb)" ]; then
-            echo "Kernel image size matches."
-          else
-            echo "Kernel image size mismatch!"
-            exit 1
-          fi
-          if [ "${{ env.KSU_EXPECTED_HASH }}" == "$(sha256sum $GITHUB_WORKSPACE/artifacts/Image.gz-dtb | cut -d ' ' -f 1)" ]; then
-            echo "Kernel image hash matches."
-          else
-            echo "Kernel image hash mismatch!"
-            exit 1
-          fi
-        fi
