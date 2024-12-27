@@ -61,4 +61,70 @@ jobs:
         echo "BUILD_TIME=$(TZ=Asia/Shanghai date "+%Y%m%d%H%M")" >> $GITHUB_ENV
         echo "DEVICE=$(echo ${{ env.KERNEL_CONFIG }} | sed 's!vendor/!!;s/_defconfig//;s/_user//;s/-perf//')" >> $GITHUB_ENV
         sudo apt-get update -y && sudo apt-get upgrade -y
-        sudo apt remove gcc g++ -y && sudo apt-get install -y llvm lld-12 gcc-aarch64-linux-gnu g++-aarch64-linux-gnu gcc-arm-linux-gnueabi g++-arm-linux-gnueabi gcc g++ git gnupg binutils-arm-linux-gnueabi binutils-aarch64-linux-gnu curl wget vim ccache automake flex lzop bison gperf zip zlib1g-dev libxml2-utils bzip2 libbz2-dev libbz2-1.0 libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev liblz4-tool make optipng maven libssl-dev pwgen lib
+        sudo apt remove gcc g++ -y && sudo apt-get install -y llvm lld-12 gcc-aarch64-linux-gnu g++-aarch64-linux-gnu gcc-arm-linux-gnueabi g++-arm-linux-gnueabi gcc g++ git gnupg binutils-arm-linux-gnueabi binutils-aarch64-linux-gnu curl wget vim ccache automake flex lzop bison gperf zip zlib1g-dev libxml2-utils bzip2 libbz2-dev libbz2-1.0 libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev liblz4-tool make optipng maven libssl-dev pwgen libgmp-dev libncurses5
+        sudo apt-get install -y libssl-dev pwgen libgmp-dev libncurses5-dev flex liblz4-tool make autoconf libtool yasm cmake pkg-config libtool python3 python3-pip bc gawk qemu-user-static
+    - name: Download Clang toolchain
+      if: ${{ env.USE_CUSTOM_CLANG == 'true' }}
+      run: |
+        git clone --depth=1 --branch=${{ env.CLANG_BRANCH }} https://github.com/llvm/llvm-project.git clang
+        cd clang && git submodule update --init --recursive && cd ..
+        export PATH=$(pwd)/clang/bin:$PATH
+        echo "Clang version:"
+        clang --version
+    - name: Download custom GCC toolchain
+      if: ${{ env.USE_CUSTOM_GCC_64 == 'true' }}
+      run: |
+        git clone --depth=1 --branch=${{ env.CUSTOM_GCC_64_BRANCH }} ${CUSTOM_GCC_64_SOURCE} gcc-64
+        cd gcc-64 && ./contrib/download_prerequisites && cd ..
+        export PATH=$(pwd)/gcc-64/bin:$PATH
+    - name: Download custom GCC 32 toolchain
+      if: ${{ env.USE_CUSTOM_GCC_32 == 'true' }}
+      run: |
+        git clone --depth=1 --branch=${{ env.CUSTOM_GCC_32_BRANCH }} ${CUSTOM_GCC_32_SOURCE} gcc-32
+        cd gcc-32 && ./contrib/download_prerequisites && cd ..
+        export PATH=$(pwd)/gcc-32/bin:$PATH
+    - name: Checkout Kernel Source
+      run: |
+        git clone --depth=1 --branch=${{ env.KERNEL_SOURCE_BRANCH }} ${KERNEL_SOURCE}
+        cd $(basename ${KERNEL_SOURCE}) && git submodule update --init --recursive
+    - name: Configure Kernel
+      run: |
+        cd $(basename ${KERNEL_SOURCE})
+        cp ${KERNEL_CONFIG} .config
+        make ARCH=${ARCH} defconfig
+        make ARCH=${ARCH} prepare
+        make ARCH=${ARCH} modules_prepare
+    - name: Build Kernel
+      run: |
+        cd $(basename ${KERNEL_SOURCE})
+        make ARCH=${ARCH} -j$(nproc) CCACHE_DIR=$(pwd)/.ccache -j$(nproc) ${EXTRA_CMDS}
+    - name: Build Boot Image
+      if: ${{ env.BUILD_BOOT_IMG == 'true' }}
+      run: |
+        cd $(basename ${KERNEL_SOURCE})
+        make ARCH=${ARCH} bootimage
+    - name: Create DTBO image
+      if: ${{ env.NEED_DTBO == 'true' }}
+      run: |
+        cd $(basename ${KERNEL_SOURCE})
+        make ARCH=${ARCH} dtboimage
+    - name: Check KSU Hash
+      if: ${{ env.ENABLE_KERNELSU == 'true' }}
+      run: |
+        echo "Checking KSU Hash"
+        cd $(basename ${KERNEL_SOURCE})
+        KERNELSU_HASH=$(sha256sum out/target/product/${DEVICE}/kernel | cut -d ' ' -f1)
+        if [[ "$KERNELSU_HASH" == "${KSU_EXPECTED_HASH}" ]]; then
+          echo "KernelSU Hash matches expected hash"
+        else
+          echo "KernelSU Hash mismatch"
+          exit 1
+        fi
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: kernel-artifacts
+        path: |
+          $(basename ${KERNEL_SOURCE})/out/target/product/${DEVICE}/kernel
+          $(basename ${KERNEL_SOURCE})/out/target/product/${DEVICE}/boot.img
+          $(basename ${KERNEL_SOURCE})/out/target/product/${DEVICE}/dtbo.img
